@@ -4,6 +4,7 @@ desc: 让主 Agent 自己决定要不要主动开口；定时器只给机会，�
 short_desc: 主 Agent 的主动思维与表情选择，不再由插件替它说话
 version: 1.2.0
 author: mingyu
+repo: "https://github.com/mingyu011/astrbot_plugin_self_thinking"
 support_platforms:
   - aiocqhttp
   - qq_official
