@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "images": {
+    "happy": {
+      "id": "happy",
+      "rel_path": "happy.gif",
+      "tags": ["表情包", "开心", "笑"]
+    },
+    "sad": {
+      "id": "sad",
+      "rel_path": "sad.gif",
+      "tags": ["表情包", "难过", "哭"]
+    },
+    "cat": {
+      "id": "cat",
+      "rel_path": "cat.jpg",
+      "tags": ["表情包", "猫", "得意"]
+    }
+  }
+}

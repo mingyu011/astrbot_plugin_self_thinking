@@ -1,0 +1,92 @@
+{
+  "enabled": {
+    "description": "自主思维总开关",
+    "type": "bool",
+    "default": true,
+    "hint": "关闭后不会再创建主动唤醒任务；正常聊天和表情工具不受影响。"
+  },
+  "check_interval_seconds": {
+    "description": "检查间隔（秒）",
+    "type": "int",
+    "default": 60,
+    "hint": "每隔多少秒检查一次是否该给主 Agent 一次主动开口机会。太短会频繁打扰，建议 60 秒以上。"
+  },
+  "min_idle_minutes": {
+    "description": "至少安静多少分钟",
+    "type": "int",
+    "default": 90,
+    "hint": "最后一次私聊之后至少安静这么久，才考虑主动开口。防止对方刚说完就插话。"
+  },
+  "min_gap_minutes": {
+    "description": "两次主动机会的最小间隔（分钟）",
+    "type": "int",
+    "default": 180,
+    "hint": "上一次把主动机会交给主 Agent 后，至少隔这么久才会再给一次；模型可以选择沉默。"
+  },
+  "daily_cap": {
+    "description": "每天最多给几次机会",
+    "type": "int",
+    "default": 4,
+    "hint": "按本地日期计算。给机会不等于一定发消息，模型可以判断后保持沉默。"
+  },
+  "quiet_start": {
+    "description": "安静时段开始（小时）",
+    "type": "int",
+    "default": 23,
+    "hint": "24 小时制，例如 23 表示 23:00 之后不主动打扰。"
+  },
+  "quiet_end": {
+    "description": "安静时段结束（小时）",
+    "type": "int",
+    "default": 7,
+    "hint": "24 小时制，例如 7 表示 07:00 之前不主动打扰。开始和结束相同表示不启用安静时段。"
+  },
+  "memory_max_chars": {
+    "description": "主动提示里的记忆摘要上限（字符）",
+    "type": "int",
+    "default": 2400,
+    "hint": "从全量记忆体取的纪要、事实、相关原文最多带多少字。太长会挤占主动判断，建议 2000～4000。"
+  },
+  "emoji_enabled": {
+    "description": "允许模型发表情包",
+    "type": "bool",
+    "default": true,
+    "hint": "关闭后 send_emoji 工具不会发送图片；正常文字聊天不受影响。"
+  },
+  "image_plugin_data_dir": {
+    "description": "表情库数据目录",
+    "type": "string",
+    "default": "",
+    "hint": "留空 = 自动找智能图片对话的 plugin_data 目录。只有你把那个插件的数据搬到别处时才需要填。"
+  },
+  "image_index_path": {
+    "description": "表情索引文件",
+    "type": "string",
+    "default": "",
+    "hint": "留空 = 表情库数据目录下的 image_index.json。智能图片对话打好的标签就在这个文件里。"
+  },
+  "image_config_path": {
+    "description": "智能图片对话配置文件",
+    "type": "string",
+    "default": "",
+    "hint": "留空 = 自动找 data/config/astrbot_plugin_smart_imagechat_hub_config.json，用作 image_index.json 不存在时的兜底。"
+  },
+  "emoji_recent_limit": {
+    "description": "避免重复的表情数量",
+    "type": "int",
+    "default": 30,
+    "hint": "最近用过的这么多张会降权/避开，防止连续发同一张图。"
+  },
+  "emoji_fallback_random": {
+    "description": "没有匹配时随机发",
+    "type": "bool",
+    "default": false,
+    "hint": "默认关闭：找不到足够匹配的表情就不发，避免为了发图而发图。"
+  },
+  "prompt_extra": {
+    "description": "主动开口附加要求",
+    "type": "string",
+    "default": "",
+    "hint": "可选。会追加到主动唤醒提示词里，例如“不要提起工作”“最多一句话”。"
+  }
+}

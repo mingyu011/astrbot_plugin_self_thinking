@@ -1,0 +1,24 @@
+{
+  "windows": {
+    "aiocqhttp:private:111": {
+      "user_id": "111",
+      "last_active_at": 100,
+      "last_message": "a",
+      "last_proactive_at": 0,
+      "last_proactive_attempt_at": 0,
+      "daily_date": "2026-10-30",
+      "daily_count": 1,
+      "last_job_id": "j1"
+    },
+    "aiocqhttp:private:222": {
+      "user_id": "222",
+      "last_active_at": 200,
+      "last_message": "b",
+      "last_proactive_at": 0,
+      "last_proactive_attempt_at": 0,
+      "daily_date": "2026-10-30",
+      "daily_count": 0,
+      "last_job_id": ""
+    }
+  }
+}

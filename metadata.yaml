@@ -1,0 +1,11 @@
+name: astrbot_plugin_self_thinking
+display_name: 自主思维
+desc: 让主 Agent 自己决定要不要主动开口；定时器只给机会，不代写、不代发。附带由模型调用的本地表情包工具。
+short_desc: 主 Agent 的主动思维与表情选择，不再由插件替它说话
+version: 1.0.1
+author: mingyu
+support_platforms:
+  - aiocqhttp
+  - qq_official
+  - webchat
+astrbot_version: ">=4.29.0"
