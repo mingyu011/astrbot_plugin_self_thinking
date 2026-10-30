@@ -43,6 +43,7 @@ def _default_state() -> dict:
         "daily_count": 0,
         "recent_emoji_ids": [],
         "manual_off": False,
+        "autonomy_paused": False,
     }
 
 
