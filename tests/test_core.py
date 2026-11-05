@@ -63,6 +63,14 @@ class StateTest(unittest.TestCase):
         self.assertEqual(
             state.windows()["aiocqhttp:private:333"]["last_message"], "新窗口")
 
+    def test_forget_self_window(self):
+        state = StateStore(os.path.join(FIXTURES, "state"))
+        state.save = lambda: None
+        state.note_private("aiocqhttp:private:999", "999", "自己")
+        self.assertIn("aiocqhttp:private:999", state.windows())
+        self.assertEqual(state.forget_windows_by_user("999"), 1)
+        self.assertNotIn("aiocqhttp:private:999", state.windows())
+
 
 if __name__ == "__main__":
     unittest.main()

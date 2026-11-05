@@ -15,7 +15,6 @@ import asyncio
 import inspect
 import os
 import re
-import shutil
 import sys
 import time
 import webbrowser
@@ -28,6 +27,7 @@ from astrbot.api.message_components import Image, Plain
 from astrbot.api.star import Context, Star, StarTools
 
 from .core import memory_bridge
+from .core import safety
 from .core.autonomy import (AuditLog, BrowserHistory, PendingStore,
                             ScreenCapture, WebReader, Workspace)
 from .core.image_library import EmojiLibrary
@@ -35,7 +35,7 @@ from .core.state import StateStore
 
 PLUGIN_NAME = "astrbot_plugin_self_thinking"
 DISPLAY_NAME = "自主思维"
-VERSION = "1.2.0"
+VERSION = "1.3.0"
 
 DEFAULTS = {
     "enabled": True,
@@ -112,6 +112,11 @@ class SelfThinking(Star):
         )
         self._task = None
         self._closed = False
+        # 当前 Bot 自己的 QQ/平台 ID；用来排除“自己和自己”的会话窗口。
+        self._self_ids: set[str] = set()
+        # 私聊只接受好友；陌生人/游戏卡片不建档、不回复。
+        self._friend_ids: set[str] = set()
+        self._friend_cache_at = 0.0
         self._lock = asyncio.Lock()
         self._start_loop()
 
@@ -234,20 +239,88 @@ class SelfThinking(Star):
     def _quiet(self, now: datetime) -> bool:
         start = _as_int(self._cfg("quiet_start"), 23)
         end = _as_int(self._cfg("quiet_end"), 7)
-        start = max(0, min(23, start))
-        end = max(0, min(23, end))
+        start = max(0, min(24, start))
+        end = max(0, min(24, end))
         if start == end:
             return False
         hour = now.hour
+        # 24 表示当天结束/次日 0 点，不能截成 23。
+        if start == 24:
+            return hour < end
+        if end == 24:
+            return hour >= start
         if start < end:
             return start <= hour < end
         return hour >= start or hour < end
 
     def _windows(self) -> dict[str, dict]:
         try:
-            return self.state.windows()
+            raw = self.state.windows()
         except Exception:
             return {}
+        out: dict[str, dict] = {}
+        for umo, window in raw.items():
+            user_id = str(window.get("user_id") or "").strip()
+            # 自己对自己 id 的窗口永远不作为主动目标。
+            if user_id and user_id in self._self_ids:
+                continue
+            # 已经拿到好友列表时，陌生人不参与主动调度。
+            if self._friend_ids and user_id and user_id not in self._friend_ids:
+                continue
+            out[umo] = window
+        return out
+
+    @staticmethod
+    def _looks_like_card(event) -> bool:
+        text = str(event.get_message_str() or "")
+        if any(mark in text for mark in (
+            "[QQ分享卡片]", "[ComponentType.Json]", "ComponentType.Json",
+        )):
+            return True
+        try:
+            for comp in event.get_messages() or []:
+                if type(comp).__name__.lower() in {"json", "xml"}:
+                    return True
+        except Exception:
+            pass
+        return False
+
+    async def _is_stranger(self, event) -> bool:
+        """aiocqhttp 私聊只接受好友；拿不到好友列表时至少拦 QQ 卡片。"""
+        if str(event.get_platform_name() or "") != "aiocqhttp":
+            return False
+        sender = str(event.get_sender_id() or "").strip()
+        if not sender:
+            return False
+        bot = getattr(event, "bot", None)
+        if bot is None:
+            return self._looks_like_card(event)
+        now = time.time()
+        if now - self._friend_cache_at > 300:
+            try:
+                rows = await asyncio.wait_for(
+                    bot.get_friend_list(), timeout=5)
+                ids = {
+                    str(row.get("user_id") or row.get("uin") or "").strip()
+                    for row in (rows or [])
+                    if isinstance(row, dict)
+                }
+                if ids:
+                    self._friend_ids = ids
+                    self._friend_cache_at = now
+                    # 清掉历史里非好友/陌生人的窗口。
+                    try:
+                        for umo, window in self.state.windows().items():
+                            uid = str(window.get("user_id") or "").strip()
+                            if uid and uid not in ids and uid not in self._self_ids:
+                                self.state.forget_windows_by_user(uid)
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+        if self._friend_ids:
+            return sender not in self._friend_ids
+        return self._looks_like_card(event)
 
     def _window_daily_count(self, window: dict) -> int:
         day = time.strftime("%Y-%m-%d", time.localtime())
@@ -416,14 +489,43 @@ class SelfThinking(Star):
             # 否则会把主动提示词记成 last_message，下一次拿它去检索记忆。
             if callable(getattr(event, "get_extra", None)) and event.get_extra("cron_job"):
                 return
+            self_id = str(event.get_self_id() or "").strip()
+            sender_id = str(event.get_sender_id() or "").strip()
+            if self_id:
+                self._self_ids.add(self_id)
+                self.state.forget_windows_by_user(self_id)
+            # 机器人自己发出去的消息/自己跟自己的会话，不能成为主动目标。
+            if self_id and sender_id == self_id:
+                return
+            if await self._is_stranger(event):
+                # 陌生人/游戏卡片：不建窗口，也不让主 Agent 生成回复。
+                self.state.forget_windows_by_user(sender_id)
+                try:
+                    event.should_call_llm(False)
+                except Exception:
+                    pass
+                event.stop_event()
+                logger.info(
+                    f"[self_thinking] 陌生人私聊已忽略：{sender_id}")
+                return
             umo = str(getattr(event, "unified_msg_origin", "") or "").strip()
             if not umo:
                 return
             text = str(event.get_message_str() or "").strip()
+            if not text:
+                try:
+                    text = str(event.get_message_outline() or "").strip()
+                except Exception:
+                    text = ""
+            current = self.state.window(umo) or {}
             if text.startswith(("/", "／")):
                 # 指令不是聊天内容，不要把 /selfthink 当成“最后聊了什么”。
-                text = str(self.state.get("last_message") or "")
-            self.state.note_private(umo, str(event.get_sender_id() or ""), text)
+                text = str(current.get("last_message")
+                           or self.state.get("last_message") or "")
+            elif not text:
+                # 图片/语音可能没有 message_str；不要用空串覆盖聊天内容。
+                text = str(current.get("last_message") or "[附件]")
+            self.state.note_private(umo, sender_id, text)
         except Exception as exc:
             logger.debug(f"[self_thinking] 记录私聊窗口失败: {exc}")
 
@@ -724,23 +826,13 @@ class SelfThinking(Star):
         )
 
     def _is_approval(self, text: str) -> bool:
-        value = " ".join(str(text or "").lower().split())
-        if not value:
-            return False
-        if re.search(r"[?？]\s*$", value) or re.search(r"(吗|么)\s*$", value):
-            return False
-        negative = ("不要", "不行", "不可以", "拒绝", "取消", "别买",
-                    "不买", "不能", "no", "nope", "cancel", "don't")
-        if any(word in value for word in negative):
-            return False
-        positive = ("可以", "行", "同意", "批准", "买吧", "买", "去吧",
-                    "好的", "好", "嗯", "ok", "okay", "yes", "sure",
-                    "go ahead", "approve", "allow")
-        return any(word in value for word in positive)
+        """当前消息是否明确同意（判定逻辑在 core/safety.py，可单测）。"""
+        return safety.is_approval(text)
 
     @filter.llm_tool(name="self_execute_action")
     async def tool_execute_action(self, event: AstrMessageEvent,
-                                  action: str = "", target: str = "") -> str:
+                                  action: str = "", target: str = "",
+                                  action_id: str = "") -> str:
         """主人已经用自然语言明确同意后，执行之前 self_request_action 记下的请求。
 
         必须由主人的当前这条消息触发；主人在问句、拒绝、或者只是普通聊天时
@@ -749,6 +841,7 @@ class SelfThinking(Star):
         Args:
             action(string): 可留空；填写时会和待执行意图核对
             target(string): 可留空；填写时会和待执行目标核对
+            action_id(string): 可留空；填写时只执行这一条待确认请求
         """
         guard = self._autonomy_guard(event)
         if guard:
@@ -762,14 +855,43 @@ class SelfThinking(Star):
         if not self._is_approval(current):
             return "主人当前这条消息没有明确同意；不要执行，继续等主人自然回复。"
         session = str(getattr(event, "unified_msg_origin", "") or "")
-        item = self.pending.latest(session)
+        item = (self.pending.get(action_id) if action_id
+                else self.pending.latest(session))
         if item is None:
             return "当前没有等待主人同意的请求。"
+        if action_id and str(item.get("status") or "pending") != "pending":
+            return "这条请求已经处理过了。"
+        if item.get("session") and session and item["session"] != session:
+            return "这条请求不是在这个会话里提出的。"
         if action and str(action).strip().lower() != str(item.get("action")):
             return "动作对不上当前待执行请求。"
         if target and str(target).strip() != str(item.get("target") or ""):
             return "目标对不上当前待执行请求。"
         return await self._execute_pending(item, event)
+
+    async def _notify_memory_outbound(self, event: AstrMessageEvent,
+                                      text: str, paths: list[str]) -> None:
+        """直发之后通知全量记忆体：这条消息也要按真实时刻入档。
+
+        没装 all_memory 或版本太老（没有 record_outbound）就静默跳过。
+        """
+        try:
+            star = memory_bridge.find_all_memory(self.context)
+            record = getattr(star, "record_outbound", None) if star else None
+            if not callable(record):
+                return
+            session = str(getattr(event, "unified_msg_origin", "") or "")
+            if not session:
+                return
+            sender = ""
+            try:
+                sender = str(event.get_sender_id() or "")
+            except Exception:
+                sender = ""
+            await record(session, text=text, paths=list(paths or []),
+                         user_id=sender)
+        except Exception as exc:
+            logger.debug(f"[self_thinking] 通知记忆体出站失败: {exc}")
 
     def _emoji_query(self, event: AstrMessageEvent, mood: str = "",
                      tags: str = "") -> str:
@@ -814,6 +936,9 @@ class SelfThinking(Star):
             except Exception as exc:
                 logger.warning(f"[self_thinking] 发表情失败: {exc}")
                 return f"发表情失败：{exc}"
+            # 直发绕过了 all_memory 的 after_message_sent；主动告诉它一声，
+            # 让它按真实时刻把这条表情写进时间线（1.5.0 的 record_outbound）
+            await self._notify_memory_outbound(event, "[表情]", [item.path])
             self.state.note_emoji(
                 item.id, _as_int(self._cfg("emoji_recent_limit"), 30))
             self._audit("send_emoji", {"id": item.id, "label": item.label()},
@@ -878,20 +1003,9 @@ class SelfThinking(Star):
         except Exception:
             return False
 
-    def _delete_requested_path(self, target: str) -> None:
-        raw = str(target or "").strip()
-        if not raw:
-            raise ValueError("删除路径为空")
-        path = Path(raw).expanduser()
-        resolved = path.resolve()
-        if resolved == Path(resolved.anchor) or len(resolved.parts) <= 1:
-            raise ValueError("不能删除磁盘根目录")
-        if resolved.is_dir():
-            shutil.rmtree(resolved)
-        elif resolved.exists():
-            resolved.unlink()
-        else:
-            raise FileNotFoundError(f"路径不存在：{resolved}")
+    def _delete_requested_path(self, target: str) -> str:
+        """把要删的东西移到回收目录，返回新路径（不是真删）。"""
+        return safety.trash_target(str(self.data_dir), target)
 
     async def _execute_pending(self, item: dict,
                                event: AstrMessageEvent) -> str:
@@ -925,7 +1039,7 @@ class SelfThinking(Star):
 
         if action == "delete":
             try:
-                self._delete_requested_path(target)
+                moved = self._delete_requested_path(target)
             except Exception as exc:
                 self._audit("execute_action", {"id": action_id,
                                                "action": action,
@@ -934,8 +1048,10 @@ class SelfThinking(Star):
                 return f"删除失败：{exc}"
             self.pending.pop(action_id)
             self._audit("execute_action", {"id": action_id, "action": action,
-                                           "target": target}, "deleted")
-            return f"已删除：{target}"
+                                           "target": target},
+                        f"moved_to={moved}", "ok")
+            return (f"已移到回收站：{moved}\n"
+                    f"（不是永久删除；确认不要了再手动清掉这个目录。）")
 
         if action == "message_third_party":
             if not target or not details:
@@ -956,13 +1072,19 @@ class SelfThinking(Star):
             return "已发送。" if ok is not False else "发送失败：平台未接收。"
 
         if action == "install":
-            package = str(target or "").strip()
-            if not package:
-                return "安装目标为空。"
             try:
+                package = safety.validate_package(target)
+            except ValueError as exc:
+                self._audit("execute_action", {"id": action_id,
+                                               "action": action,
+                                               "target": str(target)},
+                            str(exc), "blocked")
+                return f"安装目标不合法：{exc}"
+            try:
+                # `--` 之后一律当包名，防止 `--index-url …` 这种参数注入
                 proc = await asyncio.create_subprocess_exec(
                     sys.executable, "-m", "pip", "install",
-                    "--disable-pip-version-check", package,
+                    "--disable-pip-version-check", "--", package,
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.STDOUT,
                 )

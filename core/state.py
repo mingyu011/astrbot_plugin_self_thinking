@@ -158,7 +158,10 @@ class StateStore:
         windows[umo] = item
         item["user_id"] = str(user_id or item.get("user_id") or "")
         item["last_active_at"] = now
-        item["last_message"] = " ".join(str(text or "").split())[:1000]
+        cleaned = " ".join(str(text or "").split())[:1000]
+        # 图片/语音事件可能没有 message_str；不要用空字符串覆盖上一条聊天内容。
+        if cleaned or not str(item.get("last_message") or ""):
+            item["last_message"] = cleaned
 
         # 旧字段同步保留，方便外部工具/旧版本读取。
         self._data.update({
@@ -168,6 +171,25 @@ class StateStore:
             "last_message": item["last_message"],
         })
         self.save()
+
+    def forget_windows_by_user(self, user_id: str) -> int:
+        """删除某个平台账号自己的窗口，返回删掉的个数。"""
+        target = str(user_id or "").strip()
+        if not target:
+            return 0
+        windows = self._data.get("windows")
+        if not isinstance(windows, dict):
+            return 0
+        removed = [
+            umo for umo, item in windows.items()
+            if isinstance(item, dict)
+            and str(item.get("user_id") or "").strip() == target
+        ]
+        for umo in removed:
+            windows.pop(umo, None)
+        if removed:
+            self.save()
+        return len(removed)
 
     def note_trigger(self, umo: str, job_id: str = "") -> None:
         umo = str(umo or "").strip()
